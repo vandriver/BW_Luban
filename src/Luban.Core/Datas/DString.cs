@@ -28,6 +28,11 @@ public class DString : DType<string>
 {
     private static readonly DString s_empty = new("");
 
+    /// <summary>
+    /// 是否为 lua 代码字段(lua类型): 导出 lua 数据时原样输出不带引号
+    /// </summary>
+    public bool IsLuaCode { get; private set; }
+
     public static DString ValueOf(TType type, string s)
     {
         if (s.Length == 0)
@@ -40,13 +45,19 @@ public class DString : DType<string>
         {
             case "0":
             case "false":
-                return new DString(s);
+                return Create(type, s);
             case "1":
             case "true":
-                return new DString(System.Text.RegularExpressions.Regex.Unescape(s));
+                return Create(type, System.Text.RegularExpressions.Regex.Unescape(s));
             default:
                 throw new LubanException("error.data.unknown_escape_mode", escapeMode);
         }
+    }
+
+    private static DString Create(TType type, string s)
+    {
+        var ds = new DString(s) { IsLuaCode = type.GetTagOrDefault("lua", "0") == "1" };
+        return ds;
     }
 
     public override string TypeName => "string";

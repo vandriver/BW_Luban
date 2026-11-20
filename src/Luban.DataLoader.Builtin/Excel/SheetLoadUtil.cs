@@ -148,7 +148,8 @@ public static class SheetLoadUtil
             {
                 if (!s_knownSpecialTags.Contains(tag))
                 {
-                    s_logger.Error(MessageCatalog.Format("warn.excel.unknown_row_tag", s_curExcel.Value, rowTag, tag));
+                    // 老版兼容: 未知行 tag 从 Error 降为 Warn
+                    s_logger.Warn(MessageCatalog.Format("warn.excel.unknown_row_tag", s_curExcel.Value, rowTag, tag));
                 }
             }
         }
@@ -511,7 +512,7 @@ public static class SheetLoadUtil
 
     private static bool IsEmptyRow(List<Cell> row)
     {
-        return row.All(c => c.Value == null || c.Value is InvalidExcelValue || string.IsNullOrWhiteSpace(c.Value.ToString()));
+        return row.All(c => c.Value == null || string.IsNullOrWhiteSpace(c.Value.ToString()));
     }
 
     const int maxEmptyRowCount = 300;
@@ -531,17 +532,8 @@ public static class SheetLoadUtil
             var row = new List<Cell>();
             for (int i = 0, n = reader.FieldCount; i < n; i++)
             {
-                object value;
-                CellError? cellError = reader.GetCellError(i);
-                if (cellError != null)
-                {
-                    value = new InvalidExcelValue(rowIndex, i, cellError.Value);
-                }
-                else
-                {
-                    value = reader.GetValue(i);
-                }
-                row.Add(new Cell(rowIndex, i, value));
+                // 注意：ExcelDataReader 3.6.0 无 GetCellError，与老版 v1 行为一致直接 GetValue
+                row.Add(new Cell(rowIndex, i, reader.GetValue(i)));
             }
             ++rowIndex;
             if (IsEmptyRow(row))

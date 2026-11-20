@@ -24,6 +24,8 @@ using Luban.Defs;
 using Luban.FlatBuffers.DataVisitors;
 using Luban.Utils;
 using System.Text.Json;
+using System.Text.Encodings.Web;
+using System.Text.Unicode;
 
 namespace Luban.FlatBuffers.DataTarget;
 
@@ -32,17 +34,29 @@ public class FlatBuffersDataTarget : DataTargetBase
 {
     protected override string DefaultOutputFileExt => "json";
 
-    private void WriteAsTable(List<Record> datas, Utf8JsonWriter x)
+    private void WriteAsTable(DefTable table, List<Record> datas, Utf8JsonWriter x)
     {
         x.WriteStartObject();
         // 如果修改了这个名字，请同时修改table.tpl
         x.WritePropertyName("data_list");
-        x.WriteStartArray();
-        foreach (var d in datas)
+        if (table.IsSingletonTable)
         {
-            d.Data.Apply(FlatBuffersJsonDataVisitor.Ins, x);
+            // 老版魔改版 singleton 表 data_list 直接输出 bean 对象
+            // （与 schema 的 `data_list:Bean;` 一致，flatc 才能正确转 bin）
+            foreach (var d in datas)
+            {
+                d.Data.Apply(FlatBuffersJsonDataVisitor.Ins, x);
+            }
         }
-        x.WriteEndArray();
+        else
+        {
+            x.WriteStartArray();
+            foreach (var d in datas)
+            {
+                d.Data.Apply(FlatBuffersJsonDataVisitor.Ins, x);
+            }
+            x.WriteEndArray();
+        }
         x.WriteEndObject();
     }
 
@@ -53,9 +67,11 @@ public class FlatBuffersDataTarget : DataTargetBase
         {
             Indented = !JsonDataTarget.UseCompactJson,
             SkipValidation = false,
-            Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping,
+            // 老版魔改版对 HTML 敏感字符(& < > ' " 等)做 \uXXXX 转义但保留中文，
+            // 此处用 UnicodeRanges.All 编码器对齐老版产物（UnsafeRelaxedJsonEscaping 会直接输出 & 等字符）
+            Encoder = JavaScriptEncoder.Create(UnicodeRanges.All),
         });
-        WriteAsTable(records, jsonWriter);
+        WriteAsTable(table, records, jsonWriter);
         jsonWriter.Flush();
         return CreateOutputFile($"{table.OutputDataFile}.{OutputFileExt}", DataUtil.StreamToBytes(ss));
     }

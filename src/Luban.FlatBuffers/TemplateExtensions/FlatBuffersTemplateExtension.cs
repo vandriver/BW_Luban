@@ -38,6 +38,12 @@ public class FlatBuffersTemplateExtension : ScriptObject
         return type.Apply(FlatBuffersTypeNameVisitor.Ins);
     }
 
+    /// <summary>去掉最外层数组括号的包装表名（List_X / KeyValue_K_V），用于包装表字段类型 `[名]`</summary>
+    public static string WrapTypeName(TType type)
+    {
+        return FlatBuffersTypeNameVisitor.WrapName(type);
+    }
+
     public static string TypeMetadata(TType type)
     {
         return type.IsNullable || type.Apply(IsFlatBuffersScalarTypeVisitor.Ins) ? "" : "(required)";

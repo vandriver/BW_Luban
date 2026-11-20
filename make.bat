@@ -1,0 +1,1 @@
+dotnet publish src\Luban\Luban.csproj -c Release -o publish 2>&1

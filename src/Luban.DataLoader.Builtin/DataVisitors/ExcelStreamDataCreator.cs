@@ -301,6 +301,28 @@ class ExcelStreamDataCreator : ITypeFuncVisitor<ExcelStream, DType>
     {
         var datas = new List<DType>();
         stream = TrySep(type, stream);
+
+        // 老版兼容: list/array/set 无 sep 标签时, 若当前数据为含 ',' 的字符串(如 '1,2,3'), 消费该单元格并按 ',' 分隔解析.
+        // 老版嵌套 list(如 (list#sep=|),list,int) 的内层 list 无 sep 标签, 每个外层条目(如 '7,140001,1,1,-1')按 ',' 分隔成元素.
+        // 元素为 string 时同样触发(与旧版 V1 魔改版一致: list,string 无 sep 标签也按 ',' 拆分, 如 'a,b,c' -> [a,b,c])
+        // 注意: 必须用 ReadCell 消费掉该单元格, 否则作为容器元素时外层循环会无限重复解析
+        if (string.IsNullOrEmpty(type.GetTag("sep"))
+            && stream.TryPeek(out object peek) && peek is string s && s.Contains(','))
+        {
+            stream.ReadCell();
+            var legacyDatas = new List<DType>();
+            foreach (var token in s.Split(','))
+            {
+                if (string.IsNullOrWhiteSpace(token))
+                {
+                    continue;
+                }
+                var eleStream = new ExcelStream(new Cell(0, 0, token.Trim()), eleType.GetTag("sep"));
+                legacyDatas.Add(eleType.Apply(ExcelStreamDataCreator.Ins, eleStream));
+            }
+            return legacyDatas;
+        }
+
         while (!stream.TryReadEOF())
         {
             datas.Add(eleType.Apply(this, stream));
@@ -327,6 +349,52 @@ class ExcelStreamDataCreator : ITypeFuncVisitor<ExcelStream, DType>
     {
         //x = SepIfNeed(type, x);
         stream = TrySep(type, stream);
+
+        // 老版兼容: map 无 sep 标签时, 若数据为单个字符串(如 'k,v' 或 'k,v|k,v|...' 或 'k,v,k,v,...'),
+        // 按老版格式解析: 条目用 '|' 分隔, 条目内 key/value 用 ',' 分隔(如 '1001,300101|1002,300102');
+        // 无 '|' 时整个串按 ',' 交替取 key/value(如 '1,3,2,1,3,2,4,4' 表示 1->3, 2->1, 3->2, 4->4).
+        // 实现: 拍平成 key,value,key,value 序列构造单元格流, 走原生交替读取逻辑(value 为 list 等复杂类型时也能正确消费多个单元格).
+        // 注意: 必须用 ReadCell 消费掉该单元格, 否则作为容器元素时外层循环会无限重复解析
+        if (string.IsNullOrEmpty(type.GetTag("sep")) && stream.IncludeNullAndEmptySize == 1
+            && stream.TryPeek(out object peek) && peek is string peekStr && (peekStr.Contains('|') || peekStr.Contains(',')))
+        {
+            stream.ReadCell();
+            List<string> tokens;
+            if (peekStr.Contains('|'))
+            {
+                // 'k,v|k,v|...' 条目格式: 先按 '|' 拆条目, 再按 ',' 拆 key/value
+                var list = new List<string>();
+                foreach (var entry in peekStr.Split('|'))
+                {
+                    if (string.IsNullOrWhiteSpace(entry))
+                    {
+                        continue;
+                    }
+                    int sepIdx = entry.IndexOf(',');
+                    list.Add(sepIdx >= 0 ? entry.Substring(0, sepIdx).Trim() : entry.Trim());
+                    list.Add(sepIdx >= 0 ? entry.Substring(sepIdx + 1).Trim() : "");
+                }
+                tokens = list;
+            }
+            else
+            {
+                // 'k,v,k,v,...' 交替格式
+                tokens = peekStr.Split(',').Select(t => t.Trim()).ToList();
+            }
+            var cells = tokens.Select(t => new Cell(0, 0, t)).ToList();
+            var legacyStream = new ExcelStream(cells, 0, cells.Count - 1, null, null);
+            var legacyDatas = new Dictionary<DType, DType>();
+            while (!legacyStream.TryReadEOF())
+            {
+                var key = type.KeyType.Apply(this, legacyStream);
+                var value = type.ValueType.Apply(this, legacyStream);
+                if (!legacyDatas.TryAdd(key, value))
+                {
+                    throw new LubanException("error.data.map_duplicate_key", key);
+                }
+            }
+            return new DMap(type, legacyDatas);
+        }
 
         var datas = new Dictionary<DType, DType>();
         while (!stream.TryReadEOF())

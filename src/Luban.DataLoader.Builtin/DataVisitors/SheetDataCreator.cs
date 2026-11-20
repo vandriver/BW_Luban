@@ -337,7 +337,10 @@ class SheetDataCreator : ITypeFuncVisitor<RowColumnSheet, TitleRow, DType>
             string fname = f.Name;
             if (!TryGetBeanField(row, f, out var field))
             {
-                throw new LubanException("error.excel.missing_column", bean.FullName, fname);
+                // 老版魔改版对缺失列按空值处理（简单类型取默认值、容器取空），
+                // 多 sheet 合并时各 sheet 表头允许不一致（如 Item.xlsx 的 Item_alliance sheet 缺部分列）
+                list.Add(CreateMissingFieldDType(f.CType, fname, bean));
+                continue;
             }
             try
             {
@@ -356,6 +359,32 @@ class SheetDataCreator : ITypeFuncVisitor<RowColumnSheet, TitleRow, DType>
             }
         }
         return list;
+    }
+
+    /// <summary>
+    /// 缺失列时按类型构造空值（对齐老版魔改版行为：缺失列 = 空单元格）。
+    /// 可空 bean 返回 null；非可空 bean 及无法默认的类型保持原样报错。
+    /// </summary>
+    private DType CreateMissingFieldDType(TType type, string fname, DefBean bean)
+    {
+        switch (type)
+        {
+            case TBool: return DBool.ValueOf(false);
+            case TByte: return DByte.Default;
+            case TShort: return DShort.Default;
+            case TInt: return DInt.Default;
+            case TLong: return DLong.Default;
+            case TFloat: return DFloat.Default;
+            case TDouble: return DDouble.Default;
+            case TString: return DString.ValueOf(type, string.Empty);
+            case TArray a: return new DArray(a, new List<DType>());
+            case TList l: return new DList(l, new List<DType>());
+            case TSet s: return new DSet(s, new List<DType>());
+            case TMap m: return new DMap(m, new Dictionary<DType, DType>());
+            case TBean b when b.IsNullable: return null;
+            default:
+                throw new Exception($"bean:'{bean.FullName}' 缺失 列:'{fname}'，且字段类型:'{type}' 不支持缺失列默认值，请检查是否写错或者遗漏");
+        }
     }
 
     public DType Accept(TBean type, RowColumnSheet sheet, TitleRow row)

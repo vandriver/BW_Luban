@@ -55,6 +55,21 @@ public class Json2DataTarget : JsonDataTarget
                 x.WriteEndObject();
                 break;
             }
+            case TableMode.DEFINE:
+            {
+                // 老版兼容: mode=define 表输出 {key: define_value} 键值对象(对齐 v3 data_json2)
+                x.WriteStartObject();
+                string indexName = table.IndexField.Name;
+                foreach (var rec in datas)
+                {
+                    var indexFieldData = rec.Data.GetField(indexName);
+                    x.WritePropertyName(indexFieldData.Apply(ToJsonPropertyNameVisitor.Ins));
+                    rec.Data.GetField(table.DefineValue).Apply(Json2DataVisitor.Ins, x);
+                }
+
+                x.WriteEndObject();
+                break;
+            }
             case TableMode.LIST:
             {
                 WriteAsArray(datas, x, Json2DataVisitor.Ins);

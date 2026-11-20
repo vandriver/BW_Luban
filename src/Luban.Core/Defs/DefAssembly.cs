@@ -414,6 +414,10 @@ public class DefAssembly
             case "text":
                 tags.Add("text", "1");
                 return TString.Create(nullable, tags);
+            case "lua":
+                // 老版自定义类型: 字段值是一段 lua 代码(如表结构/函数), 导出 lua 数据时原样输出不带引号
+                tags["lua"] = "1";
+                return TString.Create(nullable, tags);
             case "time":
             case "datetime":
                 return TDateTime.Create(nullable, tags);

@@ -48,6 +48,9 @@ public class DefTable : DefTypeBase
         _outputFile = b.OutputFile;
         CurrentVariant = b.CurrentVariant ?? "";
         Source = b.Source;
+        // 老版兼容: mode=define 表的取值列/值注释列
+        DefineValue = b.DefineValue;
+        DefineComment = b.DefineComment;
     }
 
     public string Index { get; private set; }
@@ -65,15 +68,27 @@ public class DefTable : DefTypeBase
 
     public bool IsSingletonTable => Mode == TableMode.ONE;
 
-    public bool IsMapTable => Mode == TableMode.MAP;
+    // 老版兼容: define 表在编译/索引/校验上与 map 表一致, 仅导出格式不同(常量枚举)
+    public bool IsMapTable => Mode == TableMode.MAP || IsDefineTable;
+
+    public bool IsDefineTable => Mode == TableMode.DEFINE;
 
     public bool IsListTable => Mode == TableMode.LIST;
+
+    /// <summary>define 表取值字段名(导出 {index: 该字段值})</summary>
+    public string DefineValue { get; }
+
+    /// <summary>define 表值注释字段名(导出时追加 -- 注释)</summary>
+    public string DefineComment { get; }
 
     public bool IsExported { get; set; }
 
     public List<string> InputFiles { get; }
 
     private readonly string _outputFile;
+
+    /// <summary>表定义 output 列(重命名目标名), 可能为空</summary>
+    public string OutputFile => _outputFile;
 
     public TType KeyTType { get; private set; }
 
@@ -114,16 +129,15 @@ public class DefTable : DefTypeBase
                 break;
             }
             case TableMode.MAP:
+            case TableMode.DEFINE:
             {
                 IsUnionIndex = true;
                 if (!string.IsNullOrWhiteSpace(Index))
                 {
                     if (ValueTType.DefBean.TryGetField(Index, out var f, out var i))
                     {
-                        if(!f.NeedExport() && this.NeedExport())
-                        {
-                            throw new LubanException(Source, "error.def.table.index_not_exported", FullName, f.Name);
-                        }
+                        // 老版魔改版容忍索引字段被 group 过滤（schema 不输出该字段，key 由数据隐含），
+                        // 因此这里不校验 NeedExport
                         IndexField = f;
                         IndexFieldIdIndex = i;
                     }
@@ -140,10 +154,7 @@ public class DefTable : DefTypeBase
                 {
                     var f = ValueTType.DefBean.HierarchyFields[0];
 
-                    if (!f.NeedExport() && this.NeedExport())
-                    {
-                        throw new LubanException(Source, "error.def.table.default_index_not_exported", FullName, f.Name);
-                    }
+                    // 老版魔改版容忍默认索引字段被 group 过滤（如 MapRefresh 的 id 是 s 组不导出）
                     IndexField = f;
                     Index = IndexField.Name;
                     IndexFieldIdIndex = 0;
@@ -151,6 +162,18 @@ public class DefTable : DefTypeBase
                 KeyTType = IndexField.CType;
                 Type = TMap.Create(false, null, KeyTType, ValueTType, false);
                 this.IndexList.Add(new IndexInfo(KeyTType, IndexField, IndexFieldIdIndex));
+                if (IsDefineTable)
+                {
+                    // 老版兼容: define 表校验取值列/值注释列存在(缺失会导致导出静默出错)
+                    if (!ValueTType.DefBean.TryGetField(DefineValue, out _, out _))
+                    {
+                        throw new Exception($"table:'{FullName}' mode=define 的 define_value:'{DefineValue}' 字段不存在");
+                    }
+                    if (!string.IsNullOrWhiteSpace(DefineComment) && !ValueTType.DefBean.TryGetField(DefineComment, out _, out _))
+                    {
+                        throw new Exception($"table:'{FullName}' mode=define 的 define_comment:'{DefineComment}' 字段不存在");
+                    }
+                }
                 break;
             }
             case TableMode.LIST:

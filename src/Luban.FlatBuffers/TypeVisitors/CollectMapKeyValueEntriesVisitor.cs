@@ -65,7 +65,9 @@ public class CollectMapKeyValueEntriesVisitor : DecoratorActionVisitor<MapKeyVal
 
     private static string MakeKeyValueType(TMap type)
     {
-        return $"{type.KeyType.Apply(FlatBuffersTypeNameVisitor.Ins)}_{type.ValueType.Apply(FlatBuffersTypeNameVisitor.Ins)}";
+        // 键/值可能是嵌套容器（如 map,int,list,int），用 WrapName 递归保证
+        // 与字段类型名 `[KeyValue_...]` 一致（老版魔改行为：KeyValue_int32_List_int32）
+        return $"{FlatBuffersTypeNameVisitor.WrapName(type.KeyType)}_{FlatBuffersTypeNameVisitor.WrapName(type.ValueType)}";
     }
 
     public override void Accept(TBean type, MapKeyValueEntryCollection x)

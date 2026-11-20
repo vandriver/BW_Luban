@@ -86,4 +86,42 @@ public class FlatBuffersJsonDataVisitor : JsonDataVisitor
         }
         x.WriteEndArray();
     }
+
+    // flatbuffers 不允许嵌套 vector，嵌套 list/set/array 在 schema 中包装为
+    // List_X 表（字段名固定为 list）。json 与 schema 对应：最外层为数组，
+    // 元素是容器时输出 {"list": [...]} 对象（与老版产物 [{"list": [0]}] 一致）
+    private void WriteNestedList(List<DType> datas, Utf8JsonWriter x)
+    {
+        x.WriteStartArray();
+        foreach (var d in datas)
+        {
+            if (d is DList or DSet or DArray or DMap)
+            {
+                x.WriteStartObject();
+                x.WritePropertyName("list");
+                d.Apply(this, x);
+                x.WriteEndObject();
+            }
+            else
+            {
+                d.Apply(this, x);
+            }
+        }
+        x.WriteEndArray();
+    }
+
+    public override void Accept(DArray type, Utf8JsonWriter x)
+    {
+        WriteNestedList(type.Datas, x);
+    }
+
+    public override void Accept(DList type, Utf8JsonWriter x)
+    {
+        WriteNestedList(type.Datas, x);
+    }
+
+    public override void Accept(DSet type, Utf8JsonWriter x)
+    {
+        WriteNestedList(type.Datas, x);
+    }
 }

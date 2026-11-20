@@ -25,4 +25,7 @@ public enum TableMode
     ONE,
     MAP,
     LIST,
+    // 老版兼容: mode=define 是旧版 ID 枚举表(取 index 字段为 key、define_value 字段值为 value,
+    // 导出常量枚举产物), 编译/索引/校验与 map 表一致, 仅导出格式不同
+    DEFINE,
 }

@@ -1,0 +1,53 @@
+namespace {{__namespace}};
+file_extension "bytes";
+
+{{~for bean in __beans~}}
+{{~if bean.is_abstract_type && __ref_beans[bean.full_name] ~}}
+union {{full_name bean}} {
+    {{~for c in bean.hierarchy_not_abstract_children~}}
+    {{full_name c}},
+    {{~end~}}
+}
+{{~end~}}
+{{~end~}}
+
+{{~for bean in __beans~}}
+{{~if !bean.is_abstract_type && __ref_beans[bean.full_name] ~}}
+table {{full_name bean}} {
+    {{~for f in bean.hierarchy_export_fields ~}}
+    {{~if __index_fields[bean.full_name] == f.name~}}
+    {{f.name}}:{{declaring_type_name f.ctype}}(key);
+    {{~else~}}
+    {{f.name}}:{{declaring_type_name f.ctype}}{{type_metadata f.ctype}};
+    {{~end~}}
+    {{~end~}}
+}
+{{~end~}}
+{{~end~}}
+
+{{~for map in __maps~}}
+table KeyValue_{{wrap_type_name map.key_type}}_{{wrap_type_name map.value_type}} {
+    key: {{declaring_type_name map.key_type}}(key);
+    value: {{declaring_type_name map.value_type}}{{type_metadata map.value_type}};
+}
+{{~end~}}
+
+{{~for list in __lists~}}
+table {{list.key}} {
+    list: [{{wrap_type_name list.value}}](required);
+}
+{{~end~}}
+
+{{~for table in __tables~}}
+table {{full_name table}} {
+    // WARN! The name 'data_list' is used by FlatBuffersJsonExporter. don't modify it!
+    {{~if table.is_singleton_table~}}
+    data_list:{{declaring_type_name table.value_ttype}};
+    {{~else~}}
+    data_list:[{{declaring_type_name table.value_ttype}}](required);
+    {{~end~}}
+}
+
+root_type {{full_name table}};
+{{~end~}}
+

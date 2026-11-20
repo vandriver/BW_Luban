@@ -28,6 +28,21 @@ public class FlatBuffersTypeNameVisitor : ITypeFuncVisitor<string>
 {
     public static FlatBuffersTypeNameVisitor Ins { get; } = new();
 
+    // flatbuffers 不允许嵌套 vector（vector of vector 会被 flatc 拒绝），
+    // 因此嵌套容器统一包装为单字段表：List_X { list: [X]; } / KeyValue_K_V { key; value; }。
+    // WrapName 返回去掉最外层数组括号的包装表名（与字段类型名 `[WrapName(t)]` 配套使用）。
+    public static string WrapName(TType type)
+    {
+        switch (type)
+        {
+            case TList l: return $"List_{WrapName(l.ElementType)}";
+            case TSet s: return $"List_{WrapName(s.ElementType)}";
+            case TArray a: return $"List_{WrapName(a.ElementType)}";
+            case TMap m: return $"KeyValue_{WrapName(m.KeyType)}_{WrapName(m.ValueType)}";
+            default: return type.Apply(Ins);
+        }
+    }
+
     public string Accept(TBool type)
     {
         return "bool";
@@ -65,7 +80,8 @@ public class FlatBuffersTypeNameVisitor : ITypeFuncVisitor<string>
 
     public string Accept(TEnum type)
     {
-        return TypeUtil.MakeFlatBuffersFullName(type.DefEnum.Namespace, type.DefEnum.Name);
+        // 老版魔改不生成 enum 定义，枚举字段一律映射为 int32
+        return "int32";
     }
 
     public string Accept(TString type)
@@ -83,23 +99,25 @@ public class FlatBuffersTypeNameVisitor : ITypeFuncVisitor<string>
         return TypeUtil.MakeFlatBuffersFullName(type.DefBean.Namespace, type.DefBean.Name);
     }
 
+    // 字段类型名只对元素做包装：list,list,int32 -> [List_int32]（老版行为），
+    // 若对整体 WrapName 会多包一层（[List_List_int32]）
     public string Accept(TArray type)
     {
-        return $"[{type.ElementType.Apply(this)}]";
+        return $"[{WrapName(type.ElementType)}]";
     }
 
     public string Accept(TList type)
     {
-        return $"[{type.ElementType.Apply(this)}]";
+        return $"[{WrapName(type.ElementType)}]";
     }
 
     public string Accept(TSet type)
     {
-        return $"[{type.ElementType.Apply(this)}]";
+        return $"[{WrapName(type.ElementType)}]";
     }
 
     public string Accept(TMap type)
     {
-        return $"[KeyValue_{type.KeyType.Apply(this)}_{type.ValueType.Apply(this)}]";
+        return $"[{WrapName(type)}]";
     }
 }

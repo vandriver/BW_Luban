@@ -1,0 +1,398 @@
+diff --git a/CIPipe/Unity/LubanExportConfig.py b/CIPipe/Unity/LubanExportConfig.py
+index d719c0d..3d278f0 100644
+--- a/CIPipe/Unity/LubanExportConfig.py
++++ b/CIPipe/Unity/LubanExportConfig.py
+@@ -44,7 +44,7 @@ import platform
+ import time
+ from JobsEnv import Job_PlyerBuilder, JenkinsEnvVars, DingtalkCfg, Job_CocosBuilder
+ from Business import UnityJobEnv
+-from Tools import FileUtils, GitUtil, MetaUtil, SvnUtil, MiscUtils, UnityUtil, LubanV4Exporter
++from Tools import FileUtils, GitUtil, MetaUtil, SvnUtil, MiscUtils, UnityUtil, LubanV4Exporter, AIErrorAnalyzer
+ from Tools.Chatbot import DingtalkChatbot
+ from datetime import datetime
+ import psutil
+@@ -804,7 +804,7 @@ def sendDingTalk(is_success: bool, title: str, msg: str, cast_time=0):
+ - [{tip}]: {msg}
+         """
+     
+-    content_str = limit_string_length(content_str, 1800)
++    content_str = limit_string_length(content_str, 3500)
+     print("ding title = ", tip, title)
+     print("ding content = ", content_str)
+     dingtalk.send_markdown(
+@@ -930,7 +930,7 @@ def DoBuildLang():
+                 sendDingTalk(True, f"{TargetDir}多语言导出成功(AOW)", "", totalTime)
+             else:
+                 print(f" 多语言导出失败, 耗时: {totalTime} s",)
+-                sendDingTalk(False, f"{TargetDir}多语言导出失败(AOW)", "export language Config failed."+ gErrorMsg, totalTime)
++                sendDingTalk(False, f"{TargetDir}多语言导出失败(AOW)", AIErrorAnalyzer.build_failure_report("多语言导出", gErrorMsg), totalTime)
+         else:
+             print("[lzj.Error] ===========多语言 SVN 更新 [失败] ", Job_PlyerBuilder.AOWConfigPath)
+             sendDingTalk(False, f"{TargetDir}多语言更新失败(AOW)", "", totalTime)
+@@ -1081,7 +1081,7 @@ def DoBuildLangOnline():
+             return 0
+         else:
+             print(f" 多语言导出失败, 耗时:{export_lang_ret}, {totalTime} s",)
+-            sendDingTalk(False, f"{TargetDir}多语言导出失败(AOW)", "export language Config failed."+ gErrorMsg, totalTime)
++            sendDingTalk(False, f"{TargetDir}多语言导出失败(AOW)", AIErrorAnalyzer.build_failure_report("多语言导出", gErrorMsg), totalTime)
+             return 1
+ 
+     except SystemExit:
+@@ -1143,8 +1143,9 @@ def DoBuild():
+                     errorFilesAndAuthors,_,authors = getExcelFileAndAuthorList(errorFiles, TargetDir)
+                     gAtAuthors.extend(authors)
+                     outputErroFiles = ", ".join(errorFilesAndAuthors)
+-                    # outputErroFiles = ", ".join(erroFiles)
+-                    sendDingTalk(False, f"{TargetDir}配置表校验(AOW)", "表校验失败:" + outputErroFiles +"\n" + verifyRetErrorMsg, totalTime)
++                    # 错误明细 + AI 分析(失败时 AI 不可用自动降级为规则明细, 不影响告警)
++                    aiErrorReport = AIErrorAnalyzer.build_failure_report("配置表校验", verifyRetErrorMsg)
++                    sendDingTalk(False, f"{TargetDir}配置表校验(AOW)", "出错表: " + outputErroFiles + "\n" + aiErrorReport, totalTime)
+                     return 1
+                 else:
+                     print(f" 配置表校验成功, 耗时: {totalTime} s",)
+@@ -1155,7 +1156,7 @@ def DoBuild():
+                 return result
+             else:
+                 print(f"[todo.lzj] (have not right token) 配置表导出失败, 耗时: {totalTime} s",)
+-                sendDingTalk(False, f"{TargetDir}配置表导出失败(AOW)", "exportConfig failed."+ gErrorMsg, totalTime)
++                sendDingTalk(False, f"{TargetDir}配置表导出失败(AOW)", AIErrorAnalyzer.build_failure_report("配置表导出", gErrorMsg), totalTime)
+         else:
+             print("[lzj.Error] ===========配置表 SVN 更新 [失败] ", Job_PlyerBuilder.AOWConfigPath)
+             sendDingTalk(False, f"{TargetDir}配置表更新失败(AOW)", "", totalTime)
+diff --git a/Tools/AIErrorAnalyzer.py b/Tools/AIErrorAnalyzer.py
+new file mode 100644
+index 0000000..341201d
+--- /dev/null
++++ b/Tools/AIErrorAnalyzer.py
+@@ -0,0 +1,312 @@
++# -*- encoding: utf-8 -*-
++"""
++@File    :   AIErrorAnalyzer.py
++@Desc    :   Luban 导表失败时的错误明细解析 + AI 分析(可选) + 钉钉 Markdown 报告组装。
++
++用法:
++    report = AIErrorAnalyzer.build_failure_report("配置表校验", raw_error_text)
++    # report 为 Markdown 字符串, 直接作为 sendDingTalk 的失败消息内容
++
++AI 分析通过 OpenAI 兼容接口(默认 Kimi/Moonshot)调用, 由环境变量控制:
++    LUBAN_AI_API_KEY    AI 接口密钥; 不配置则跳过 AI 分析, 只发送规则解析的错误明细
++    LUBAN_AI_BASE_URL   接口地址, 默认 https://api.moonshot.cn/v1
++    LUBAN_AI_MODEL      模型名, 默认 kimi-k2-0905-preview
++
++设计原则:
++    - AI 只是增强, 任何失败(无 key / 超时 / 接口报错)都降级为规则明细, 绝不影响告警本身发出
++    - 喂给 AI 的文本先按规则聚合去重, 控制 token 消耗
++"""
++
++import os
++import re
++import json
++
++import requests
++
++# ==================== 配置 ====================
++
++def _ai_base_url() -> str:
++    return os.getenv("LUBAN_AI_BASE_URL", "https://api.moonshot.cn/v1").rstrip("/")
++
++
++def _ai_model() -> str:
++    return os.getenv("LUBAN_AI_MODEL", "kimi-k2-0905-preview")
++
++
++def _ai_api_key():
++    return os.getenv("LUBAN_AI_API_KEY") or os.getenv("MOONSHOT_API_KEY")
++
++# ==================== 规则解析: 校验错误(configVerify 输出) ====================
++
++# [ERROR] 验证未通过: 表名: drop	 id: 4935	 字段: showReward
++RE_VERIFY_FAIL = re.compile(r"验证未通过:\s*表名:\s*([^\s\t]+)\s+id:\s*([^\s\t]+)\s+字段:\s*([^\s\t]+)")
++# [ERROR] 错误统计: 共 78 条
++RE_ERROR_TOTAL = re.compile(r"错误统计:\s*共\s*(\d+)\s*条")
++# 表 drop : 18 条错误
++RE_TABLE_STAT = re.compile(r"表\s+(\S+)\s*:\s*(\d+)\s*条错误")
++# Luban 导表错误: ===> table:'TbAllianceBuild' file:AllianceBuild.xlsx title:'durability' type missing!
++RE_LUBAN_ERR = re.compile(r"table:'([^']+)'\s+file:(\S+)\s+title:'([^']+)'")
++
++MAX_ID_SHOW = 12       # 单个分组最多展开多少个 id, 超出用 "等 N 个"
++MAX_DESC_LEN = 80      # 单条错误描述截断长度
++MAX_RAW_SAMPLE = 6000  # 喂给 AI 的原始日志采样上限
++
++
++def _compress_ids(ids):
++    """把 id 列表压缩成简短字符串: 连续区间合并为 a~b, 同前缀优先。
++    如 [13150351..13150355] -> '13150351~13150355'; [1,3,5] -> '1、3、5'"""
++    uniq = sorted(set(ids), key=lambda x: (len(str(x)), str(x)))
++    if not uniq:
++        return ""
++    # 尝试纯数字连续区间合并
++    try:
++        nums = sorted(set(int(x) for x in uniq))
++        ranges = []
++        start = prev = nums[0]
++        for n in nums[1:]:
++            if n == prev + 1:
++                prev = n
++            else:
++                ranges.append((start, prev))
++                start = prev = n
++        ranges.append((start, prev))
++        parts = [f"{a}~{b}" if a != b else f"{a}" for a, b in ranges]
++        text = "、".join(parts)
++        if len(uniq) > MAX_ID_SHOW and len(ranges) > 3:
++            text += f" 等 {len(uniq)} 个"
++        return text
++    except (ValueError, TypeError):
++        pass
++    text = "、".join(str(x) for x in uniq[:MAX_ID_SHOW])
++    if len(uniq) > MAX_ID_SHOW:
++        text += f" 等 {len(uniq)} 个"
++    return text
++
++
++def _shorten(text: str, limit: int = MAX_DESC_LEN) -> str:
++    text = re.sub(r"\s+", " ", text).strip()
++    return text if len(text) <= limit else text[: limit - 1] + "…"
++
++
++def parse_verify_errors(raw_text: str) -> dict:
++    """解析 configVerify 的原始错误输出, 返回分组结构:
++    {
++        "total": int,            # 错误总数(取日志里的统计, 没有则按分组数)
++        "groups": [ {"table": str, "fields": [str], "ids": [str], "desc": [str]} ],
++        "raw": str,
++    }"""
++    groups = {}  # (table, field) -> ids set
++    other_lines = []  # 非"验证未通过"的 [ERROR] 行, 用于补充描述
++    table_stats = {}  # 表名 -> 错误条数(取自"表 xx : N 条错误"统计行, 比按 id 数更准)
++    total = None
++
++    for line in (raw_text or "").splitlines():
++        line = line.strip()
++        if not line:
++            continue
++        m_total = RE_ERROR_TOTAL.search(line)
++        if m_total:
++            total = int(m_total.group(1))
++            continue
++        m_stat = RE_TABLE_STAT.search(line)
++        if m_stat:
++            table_stats[m_stat.group(1)] = int(m_stat.group(2))
++            continue
++        m = RE_VERIFY_FAIL.search(line)
++        if m:
++            table, err_id, field = m.group(1), m.group(2), m.group(3)
++            groups.setdefault((table, field), set()).add(err_id)
++        elif "[ERROR]" in line or "error" in line.lower():
++            # 截掉 "showReward = {" 这类 Lua 表片段, 避免描述带着半截配置
++            line = re.split(r"\s*=\s*\{", line.replace("[ERROR]", "").strip())[0].strip().rstrip(",")
++            if line:
++                other_lines.append(line)
++
++    result_groups = []
++    for (table, field), ids in sorted(groups.items(), key=lambda kv: (-len(kv[1]), kv[0])):
++        # 从其他错误行里找提到该表或字段的描述, 最多取 2 条
++        descs = []
++        for ol in other_lines:
++            if table in ol or field in ol:
++                s = _shorten(ol)
++                if s and s not in descs:
++                    descs.append(s)
++            if len(descs) >= 2:
++                break
++        result_groups.append({
++            "table": table,
++            "fields": [field],
++            "ids": sorted(ids),
++            "desc": descs,
++        })
++
++    # 同表多字段合并展示(如 pveSkill 的 targetSelectType + skillType)
++    merged = {}
++    for g in result_groups:
++        key = g["table"]
++        if key not in merged:
++            merged[key] = {"table": g["table"], "fields": [], "ids": set(), "desc": [], "error_count": None}
++        merged[key]["fields"].extend(f for f in g["fields"] if f not in merged[key]["fields"])
++        merged[key]["ids"].update(g["ids"])
++        for d in g["desc"]:
++            if d not in merged[key]["desc"] and len(merged[key]["desc"]) < 3:
++                merged[key]["desc"].append(d)
++
++    for table, count in table_stats.items():
++        if table in merged:
++            merged[table]["error_count"] = count
++
++    groups_list = [
++        {"table": v["table"], "fields": v["fields"], "ids": sorted(v["ids"]),
++         "desc": v["desc"], "error_count": v["error_count"]}
++        for v in sorted(merged.values(), key=lambda g: -(g["error_count"] or len(g["ids"])))
++    ]
++
++    if total is None:
++        total = sum(g.get("error_count") or len(g["ids"]) for g in groups_list) or len(other_lines)
++
++    return {"total": total, "groups": groups_list, "raw": raw_text or ""}
++
++
++def parse_luban_export_errors(raw_text: str) -> dict:
++    """解析 Luban 导表阶段错误(gErrorMsg), 格式: ===> table:'TbXxx' file:X.xlsx title:'yyy' type missing!"""
++    entries = []
++    for m in RE_LUBAN_ERR.finditer(raw_text or ""):
++        entries.append({"table": m.group(1), "file": m.group(2), "title": m.group(3)})
++
++    groups = {}
++    for e in entries:
++        key = e["file"]
++        if key not in groups:
++            groups[key] = {"table": e["table"], "file": e["file"], "titles": set()}
++        groups[key]["titles"].add(e["title"])
++
++    groups_list = [
++        {"table": g["table"], "file": g["file"], "fields": sorted(g["titles"]), "ids": [], "desc": []}
++        for g in sorted(groups.values(), key=lambda g: -len(g["titles"]))
++    ]
++    return {"total": len(entries), "groups": groups_list, "raw": raw_text or ""}
++
++
++def _render_group_bullet(g: dict) -> str:
++    """把分组渲染成一行明细: • **drop 表**：18 条 — 描述…（id 4935~4940）"""
++    count = g.get("error_count") or len(g.get("ids") or g.get("fields") or [])
++    fields = "、".join(f"`{f}`" for f in g.get("fields", []))
++    parts = [f"**{g['table']} 表**"]
++    if count:
++        parts.append(f"{count} 条")
++    if fields:
++        parts.append(f"字段 {fields}")
++    line = "，".join(parts)
++    descs = g.get("desc") or []
++    if descs:
++        line += f" — {_shorten('；'.join(descs), 100)}"
++    ids = g.get("ids")
++    if ids:
++        line += f"（id {_compress_ids(ids)}）"
++    return f"- {line}"
++
++
++# ==================== AI 分析(可选) ====================
++
++def ai_analyze(stage: str, parsed: dict):
++    """调用 AI 接口生成根因/修复建议。任何异常返回 None(调用方降级)。"""
++    api_key = _ai_api_key()
++    if not api_key:
++        return None
++
++    bullets = "\n".join(_render_group_bullet(g) for g in parsed.get("groups", []))
++    raw_sample = (parsed.get("raw") or "")[-MAX_RAW_SAMPLE:]
++
++    prompt = (
++        f"你是游戏配置导表 CI 专家。Jenkins 导表任务在【{stage}】阶段失败, "
++        f"共 {parsed.get('total', 0)} 条配置错误。\n\n"
++        f"错误明细(已按表分组):\n{bullets}\n\n"
++        f"原始日志片段:\n{raw_sample}\n\n"
++        "请输出两部分, 用纯文本、每行以 '- ' 开头、总字数不超过 250 字:\n"
++        "1) 根因: 一句话说明这批错误的共同原因\n"
++        "2) 修复建议: 具体到表名/字段的操作步骤"
++    )
++
++    try:
++        resp = requests.post(
++            f"{_ai_base_url()}/chat/completions",
++            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
++            json={
++                "model": _ai_model(),
++                # Kimi Code 平台对额外参数(system/temperature)兼容性差, 统一放 user 消息(已实测验证)
++                "messages": [
++                    {"role": "user", "content":
++                        "你是游戏配置导表 CI 专家, 回答简洁、面向策划/程序修复配置错误。\n\n" + prompt},
++                ],
++            },
++            timeout=60,
++        )
++        resp.raise_for_status()
++        content = resp.json()["choices"][0]["message"]["content"].strip()
++        return content[:1500] if content else None
++    except Exception as ex:  # noqa: BLE001 - 任何失败都不影响告警发出
++        print(f"[AIErrorAnalyzer] AI 分析失败(降级为规则明细): {ex}")
++        return None
++
++
++# ==================== 报告组装 ====================
++
++def _console_url() -> str:
++    job_url = os.getenv("JOB_URL", "")
++    build_number = os.getenv("BUILD_NUMBER", "")
++    if job_url and build_number:
++        return f"{job_url.rstrip('/')}/{build_number}/console"
++    return ""
++
++
++def build_failure_report(stage: str, raw_error: str) -> str:
++    """生成完整的失败 Markdown 报告(错误明细 + AI 建议 + 控制台链接)。"""
++    raw_error = raw_error or ""
++    # 校验类错误走 parse_verify_errors, 导表类错误走 parse_luban_export_errors
++    if RE_VERIFY_FAIL.search(raw_error):
++        parsed = parse_verify_errors(raw_error)
++    else:
++        parsed = parse_luban_export_errors(raw_error)
++        if not parsed["groups"]:
++            # 兜底: 完全无法解析时, 截取原始日志前若干行
++            sample = "\n".join(raw_error.splitlines()[:15])
++            parsed["groups"] = [{"table": "未知", "fields": [], "ids": [], "desc": [_shorten(sample, 200)]}]
++
++    lines = [
++        f"### 🔴 {stage}失败 — 错误明细",
++        "",
++        f"共 **{parsed['total']}** 条错误",
++        "",
++    ]
++    for g in parsed["groups"][:10]:
++        lines.append(_render_group_bullet(g))
++    if len(parsed["groups"]) > 10:
++        lines.append(f"- 其余 {len(parsed['groups']) - 10} 张表详见控制台日志")
++
++    ai_result = ai_analyze(stage, parsed)
++    lines.append("")
++    if ai_result:
++        lines.append("💡 **AI 分析建议**")
++        lines.append(ai_result)
++    else:
++        lines.append("💡 **AI 分析建议**")
++        lines.append("- （未配置 LUBAN_AI_API_KEY 或 AI 接口不可用, 以上为规则聚合明细）")
++
++    url = _console_url()
++    if url:
++        lines.append("")
++        lines.append(f"🔗 [查看完整日志]({url})")
++
++    return "\n".join(lines)
++
++
++# region [本地自测]
++if __name__ == "__main__":
++    import sys
++
++    log_file = sys.argv[1] if len(sys.argv) > 1 else "jenkins_339_console.log"
++    with open(log_file, "r", encoding="utf-8", errors="replace") as f:
++        text = f.read()
++    print(build_failure_report("配置表校验", text))
++# endregion
+diff --git a/run.sh b/run.sh
+index 8aebc33..5445ed1 100644
+--- a/run.sh
++++ b/run.sh
+@@ -14,6 +14,14 @@ export BUILD_USER=$BUILD_USER
+ 
+ export DingTalk_access_token=63361204c996709c85e3f42a5319b509226d5e15f3793863e42e0b9221c667b4
+ export at_mobiles="18959267005"
++
++# ===== AI 错误分析(可选) =====
++# 配置后导表失败时自动调用 AI 生成根因/修复建议, 随错误明细一起发钉钉;
++# 不配或调用失败则只发规则聚合的错误明细, 不影响告警本身。
++# 当前使用 Kimi Code 平台 key( sk-kimi 前缀 ), 若为开放平台 key 请把 BASE_URL 改为 https://api.moonshot.cn/v1
++export LUBAN_AI_API_KEY="sk-kimi-DFXDFTYvUvaSmYqB6XO6a1emw7KJEpOI3z51zWsoO9CLaTZrj0pjFiWnOYksZGxQ"
++export LUBAN_AI_BASE_URL="https://api.kimi.com/coding/v1"
++export LUBAN_AI_MODEL="kimi-k2-0905-preview"
+ echo `which python3`
+ 
+ # 更新 BW_LUBAN_CFG_EXPORT 脚本项目自身（避免使用旧版脚本执行导表）

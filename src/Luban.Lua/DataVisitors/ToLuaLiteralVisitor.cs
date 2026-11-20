@@ -33,15 +33,29 @@ public class ToLuaLiteralVisitor : ToLiteralVisitorBase
 
     public override string Accept(DString type)
     {
+        // lua 类型字段(如 drop.groups、formula.func)值是 lua 代码片段, 原样输出不带引号
+        if (type.IsLuaCode)
+        {
+            return type.Value;
+        }
+        // 老版兼容: 以 '{' 开头的字符串视为 lua 表文本, 原样输出(如 drop.groups="{{1,1002,1,{500,10000}},...}"),
+        // 与 v3 产物一致, 校验脚本按 table 遍历; 普通字符串正常转义带引号输出
+        if (type.Value.StartsWith("{", StringComparison.Ordinal))
+        {
+            return type.Value;
+        }
         return DataUtil.EscapeLuaStringWithQuote(type.Value);
     }
 
     public override string Accept(DBean type)
     {
         var x = new StringBuilder();
+        // 字段间以 ", " 分隔且最后一项后不输出逗号, 对齐 v3 产物(如 {id=1, lv=2})
+        bool hasPrevField = false;
         if (type.Type.IsAbstractType)
         {
-            x.Append($"{{ {FieldNames.LuaTypeNameKey}='{DataUtil.GetImplTypeName(type)}',");
+            x.Append($"{{ {FieldNames.LuaTypeNameKey}='{DataUtil.GetImplTypeName(type)}'");
+            hasPrevField = true;
         }
         else
         {
@@ -56,22 +70,61 @@ public class ToLuaLiteralVisitor : ToLiteralVisitorBase
             {
                 continue;
             }
-            x.Append(defField.Name).Append('=');
+            if (hasPrevField)
+            {
+                x.Append(", ");
+            }
+            hasPrevField = true;
+            // 非合法 Lua 标识符的字段名(如语言列 zh-CN、含点号/空格等)必须用 ['xxx'] 包裹, 否则生成非法 Lua 语法
+            if (IsLuaIdentifier(defField.Name))
+            {
+                x.Append(defField.Name);
+            }
+            else
+            {
+                x.Append('[').Append(DataUtil.EscapeLuaStringWithQuote(defField.Name)).Append(']');
+            }
+            x.Append('=');
             x.Append(f.Apply(this));
-            x.Append(',');
         }
         x.Append('}');
         return x.ToString();
     }
 
 
+    /// <summary>
+    /// 字段名是否为合法 Lua 标识符(字母/下划线开头, 后跟字母/数字/下划线)。
+    /// </summary>
+    private static bool IsLuaIdentifier(string name)
+    {
+        if (string.IsNullOrEmpty(name) || !(char.IsLetter(name[0]) || name[0] == '_'))
+        {
+            return false;
+        }
+        for (int i = 1; i < name.Length; i++)
+        {
+            char c = name[i];
+            if (!(char.IsLetterOrDigit(c) || c == '_'))
+            {
+                return false;
+            }
+        }
+        return true;
+    }
+
     private void Append(List<DType> datas, StringBuilder x)
     {
+        // 元素间以 ", " 分隔且最后一项后不输出逗号, 对齐 v3 产物(如 {10301, 10304})
         x.Append('{');
+        bool hasPrevElem = false;
         foreach (var e in datas)
         {
+            if (hasPrevElem)
+            {
+                x.Append(", ");
+            }
+            hasPrevElem = true;
             x.Append(e.Apply(this));
-            x.Append(',');
         }
         x.Append('}');
     }

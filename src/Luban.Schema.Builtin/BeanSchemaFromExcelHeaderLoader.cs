@@ -125,6 +125,11 @@ public class BeanSchemaFromExcelHeaderLoader : IBeanSchemaLoader
 
             cf.Comment = f.Desc;
             cf.Type = attrs[0];
+            if (cf.Type == "ignore")
+            {
+                // 老版兼容: ignore 类型列表示忽略该列(不参与导出), 如 Item.xlsx 的 #des 说明列
+                continue;
+            }
             for (int i = 1; i < attrs.Length; i++)
             {
                 var pair = attrs[i].Split('=', 2);

@@ -104,6 +104,7 @@ public class RefValidator : DataValidatorBase
                     throw new NotSupportedException($"{defTable.FullName} 是singleton表，不支持ref");
                 }
                 case TableMode.MAP:
+                case TableMode.DEFINE:
                 {
                     var recordMap = genCtx.GetTableDataInfo(defTable).FinalRecordMap;
                     if (recordMap.TryGetValue(key, out Record rec))

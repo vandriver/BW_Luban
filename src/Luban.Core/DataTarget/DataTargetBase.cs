@@ -70,6 +70,12 @@ public abstract class DataTargetBase : IDataTarget
 
     public abstract OutputFile ExportTable(DefTable table, List<Record> records);
 
+    /// <summary>
+    /// 所有表导出完成后, 额外输出一个聚合文件(如 lua 的 __tables__.lua 注册表)。
+    /// tables 为全量表定义(非当前 target 的导出子集), 默认无聚合文件。
+    /// </summary>
+    public virtual OutputFile ExportTableManifest(List<DefTable> tables) => null;
+
     public virtual OutputFile ExportTables(List<DefTable> tables)
     {
         throw new NotSupportedException();

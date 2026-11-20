@@ -39,6 +39,15 @@ public abstract class DataExporterBase : IDataExporter
                     manifest.AddFile(dataTarget.ExportTable(table, ctx.GetTableExportDataList(table)));
                 })).ToArray();
                 Task.WaitAll(tasks);
+                // 全表导出完成后, 允许 data target 追加聚合文件(如 lua 的 __tables__.lua 注册表)
+                if (dataTarget is DataTargetBase dataTargetBase)
+                {
+                    var manifestFile = dataTargetBase.ExportTableManifest(ctx.Tables);
+                    if (manifestFile != null)
+                    {
+                        manifest.AddFile(manifestFile);
+                    }
+                }
                 break;
             }
             case AggregationType.Tables:

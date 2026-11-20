@@ -78,6 +78,11 @@ public class ExcelSchemaLoader : SchemaLoaderBase
         {
             fields.Add(new() { Name = "variant", Type = "string" });
         }
+        // 老版兼容: 旧版表头用 define_from_file 列名(语义相同)
+        fields.Add(new() { Name = "define_from_file", Type = "bool" });
+        // 老版兼容: mode=define 表的取值列/值注释列
+        fields.Add(new() { Name = "define_value", Type = "string" });
+        fields.Add(new() { Name = "define_comment", Type = "string" });
 
         var defTableRecordType = new DefBean(new RawBean()
         {
@@ -106,29 +111,43 @@ public class ExcelSchemaLoader : SchemaLoaderBase
             DBean data = r.Data;
             //s_logger.Info("== read text:{}", r.Data);
             string fullName = (data.GetField("full_name") as DString).Value.Trim();
+            string valueType = (data.GetField("value_type") as DString).Value.Trim();
+            // 老版兼容: 部分行的 full_name 是 excel 公式(如 ="Tb"&C564), 或公式缓存值丢失后的占位文本(如 [object Object]), 无有效值时按约定推导表名 Tb+valueType
+            if ((fullName.StartsWith('=') || fullName.Contains("[object")) && !string.IsNullOrWhiteSpace(valueType))
+            {
+                fullName = "Tb" + valueType;
+            }
             string name = TypeUtil.GetName(fullName);
             if (string.IsNullOrWhiteSpace(fullName) || string.IsNullOrWhiteSpace(name))
             {
                 throw new LubanException("error.schema.empty_table_name", actualFile);
             }
             string module = TypeUtil.GetNamespace(fullName);
-            string valueType = (data.GetField("value_type") as DString).Value.Trim();
             string index = (data.GetField("index") as DString).Value.Trim();
             string mode = (data.GetField("mode") as DString).Value.Trim();
             string group = (data.GetField("group") as DString).Value.Trim();
             string comment = (data.GetField("comment") as DString).Value.Trim();
             bool readSchemaFromFile = (data.GetField("read_schema_from_file") as DBool).Value;
-            if (readSchemaFromFile && string.IsNullOrEmpty(TypeUtil.GetNamespace(valueType)))
+            bool defineFromFile = (data.GetField("define_from_file") as DBool).Value;
+            if ((readSchemaFromFile || defineFromFile) && string.IsNullOrEmpty(TypeUtil.GetNamespace(valueType)))
             {
                 valueType = TypeUtil.MakeFullName(module, valueType);
             }
             string inputFile = (data.GetField("input") as DString).Value.Trim();
+            // 老版兼容: input 为公式(如 =C564&".xlsx")或占位文本(如 [object Object])时推导为 valueType+".xlsx"
+            if ((inputFile.StartsWith('=') || inputFile.Contains("[object")) && !string.IsNullOrWhiteSpace(valueType))
+            {
+                inputFile = TypeUtil.GetName(valueType) + ".xlsx";
+            }
             // string patchInput = (data.GetField("patch_input") as DString).Value.Trim();
             string tags = (data.GetField("tags") as DString).Value.Trim();
             string outputFile = (data.GetField("output") as DString).Value.Trim();
             string variant = hasVariantColumn ? ((data.GetField("variant") as DString)?.Value?.Trim() ?? "") : "";
+            // 老版兼容: mode=define 表的取值列/值注释列
+            string defineValue = (data.GetField("define_value") as DString).Value.Trim();
+            string defineComment = (data.GetField("define_comment") as DString).Value.Trim();
             // string options = (data.GetField("options") as DString).Value.Trim(); 
-            var table = SchemaLoaderUtil.CreateTable(fileName, name, module, valueType, index, mode, group, comment, readSchemaFromFile, inputFile, tags, outputFile, variant);
+            var table = SchemaLoaderUtil.CreateTable(fileName, name, module, valueType, index, mode, group, comment, readSchemaFromFile || defineFromFile, inputFile, tags, outputFile, variant, defineValue, defineComment);
             Collector.Add(table);
         }
         ;

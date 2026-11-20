@@ -103,6 +103,7 @@ public class TableDataInfo
                 break;
             }
             case TableMode.MAP:
+            case TableMode.DEFINE:
             {
                 var recordMap = new Dictionary<DType, Record>();
                 foreach (Record r in mainRecords)

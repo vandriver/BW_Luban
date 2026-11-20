@@ -39,6 +39,11 @@ public class RawTable
 
     public TableMode Mode { get; set; }
 
+    // 老版兼容: mode=define 表的取值列(导出 {index: 该列值})与值注释列
+    public string DefineValue { get; set; }
+
+    public string DefineComment { get; set; }
+
     public string Comment { get; set; }
 
     public Dictionary<string, string> Tags { get; set; }

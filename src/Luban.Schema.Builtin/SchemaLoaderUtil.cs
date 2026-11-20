@@ -34,7 +34,8 @@ public static class SchemaLoaderUtil
     }
 
     public static RawTable CreateTable(string schemaFile, string name, string module, string valueType, string index, string mode, string group,
-        string comment, bool readSchemaFromFile, string input, string tags, string outputFileName, string variant = null)
+        string comment, bool readSchemaFromFile, string input, string tags, string outputFileName, string variant = null,
+        string defineValue = null, string defineComment = null)
     {
         var source = SchemaSource.FromPath(schemaFile);
         var p = new RawTable()
@@ -51,6 +52,9 @@ public static class SchemaLoaderUtil
             Tags = DefUtil.ParseAttrs(tags),
             OutputFile = outputFileName,
             Variants = DefUtil.ParseVariant(variant ?? ""),
+            // 老版兼容: mode=define 表的取值列/值注释列
+            DefineValue = defineValue,
+            DefineComment = defineComment,
         };
         if (string.IsNullOrWhiteSpace(name))
         {
@@ -112,6 +116,12 @@ public static class SchemaLoaderUtil
             case "list":
             {
                 mode = TableMode.LIST;
+                break;
+            }
+            case "define":
+            {
+                // 老版兼容: 旧版 ID 枚举表(取 index 字段为 key、define_value 字段值为 value 导出常量枚举)
+                mode = TableMode.DEFINE;
                 break;
             }
             case "":
